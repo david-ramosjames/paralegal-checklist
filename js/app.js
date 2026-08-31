@@ -46,6 +46,8 @@ const state = {
   drawerTask: null,
   events: [],
   staff: [],
+  templates: [],
+  selectedTemplateId: null,
   filter: "today",
   search: "",
   staffFilter: "",
@@ -116,8 +118,8 @@ function shell(content) {
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand">
-          <div class="brand-kicker">Case operations</div>
-          <div class="brand-name">Checklist</div>
+          <div class="brand-kicker">Ramos James</div>
+          <div class="brand-name">Paralegal Checklist</div>
         </div>
         <nav class="nav">
           ${navLink("#/work", "My Work", "work")}
@@ -155,8 +157,8 @@ function loginHtml() {
   return `
     <div class="login">
       <div class="login-card">
-        <div class="brand-kicker">Case operations</div>
-        <h1>Case Checklist</h1>
+        <div class="brand-kicker">Ramos James</div>
+        <h1>Paralegal Checklist</h1>
         <p>Sign in with your Ramos James Google account.</p>
         <div class="error">${state.error}</div>
         <button class="google-btn" id="google-login" type="button">
@@ -206,7 +208,7 @@ function workHtml() {
     </div>
     <div class="queue">
       <div class="queue-row table-head"><div>Task</div><div>Due</div><div>Type</div><div></div></div>
-      ${rows.length ? rows.map(workRow).join("") : `<div class="empty">Nothing in this queue.</div>`}
+      ${rows.length ? rows.map(workRow).join("") : `<div class="empty">Nothing in this queue yet. Open a case, import a template, then mark a next action.</div>`}
     </div>
   `;
 }
@@ -323,6 +325,7 @@ function caseHtml() {
       </div>
     </div>
     <h2 style="font-family:var(--serif);font-weight:560;">Next up</h2>
+    ${c.tasks.length ? `
     <div class="next-up">
       ${active.length ? active.map((t) => `
         <div class="card next-card" data-open-task="${t.id}">
@@ -330,19 +333,35 @@ function caseHtml() {
           <div style="font-weight:600;margin:8px 0;">${escapeHtml(t.title)}</div>
           ${badge(t.type)}
         </div>
-      `).join("") : `<div class="card">No active next action. Open a stage item to make it current.</div>`}
+      `).join("") : `<div class="card">No active next action. Open an item and mark it current.</div>`}
     </div>
-    ${STAGE_ORDER.map((stage) => stageBlock(c, stage)).join("")}
+    ${STAGE_ORDER.map((stage) => stageBlock(c, stage, true)).join("")}
+    ` : importTemplateHtml()}
   `;
 }
 
-function stageBlock(c, stage) {
+function importTemplateHtml() {
+  const templates = state.templates || [];
+  return `
+    <div class="card" style="margin-bottom:18px;">
+      <div class="label">Checklist</div>
+      <p>This case has no checklist yet. Import a template, then edit items on this case only.</p>
+      <div class="import-box">
+        <select id="import-template" class="search" style="flex:1;min-width:220px">
+          ${templates.map((t) => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join("")}
+        </select>
+        <button class="btn primary" id="import-template-btn">Import template</button>
+      </div>
+    </div>
+  `;
+}
+
+function stageBlock(c, stage, editable) {
   const items = c.tasks.filter((t) => t.stage === stage).sort((a, b) => a.sequence - b.sequence);
-  if (!items.length) return "";
   const current = c.overview.stage === stage;
   const done = items.filter((t) => t.status === "completed").length;
-  const quiet = items.every((t) => t.status === "completed" || t.status === "skipped" || t.status === "na");
-  const open = current || !quiet;
+  const quiet = items.length > 0 && items.every((t) => t.status === "completed" || t.status === "skipped" || t.status === "na");
+  const open = current || !quiet || !items.length;
   return `
     <section class="stage ${current ? "current" : ""} ${quiet ? "quiet" : ""}">
       <button class="stage-head" data-toggle-stage="${stage}">
@@ -358,22 +377,62 @@ function stageBlock(c, stage) {
             ${t.status === "active" ? badge(t.type) : `<span class="muted">${t.status}</span>`}
           </button>
         `).join("")}
+        ${editable ? `
+          <div class="add-row">
+            <input data-new-task-title="${stage}" placeholder="Add a task on this case">
+            <select data-new-task-type="${stage}">${typeOptions("todo")}</select>
+            <button class="btn" data-add-case-task="${stage}">Add</button>
+          </div>
+        ` : ""}
       </div>
     </section>
   `;
 }
 
+function typeOptions(selected) {
+  return TYPE_ORDER.map((type) => `<option value="${type}" ${type === selected ? "selected" : ""}>${TYPE_LABEL[type]}</option>`).join("");
+}
+
 function templatesHtml() {
-  const items = state.templateItems || [];
+  const templates = state.templates || [];
+  const selected = templates.find((t) => t.id === state.selectedTemplateId) || templates[0];
+  const items = (state.templateItems || []).filter((i) => i.template_id === selected?.id);
   return `
-    <div class="page-head"><div><h1>Templates</h1><p>Personal Injury — Core. Case-level edits stay on the case.</p></div></div>
-    ${STAGE_ORDER.map((stage) => {
-      const rows = items.filter((i) => i.stage === stage);
-      if (!rows.length) return "";
-      return `<section class="stage current"><div class="stage-head"><span>${STAGE_LABEL[stage]}</span><span>${rows.length}</span></div>
-        ${rows.map((i) => `<div class="stage-item"><span class="dot upcoming"></span><span>${escapeHtml(i.title)}</span><span></span>${badge(i.default_type)}</div>`).join("")}
-      </section>`;
-    }).join("")}
+    <div class="page-head">
+      <div>
+        <h1>Templates</h1>
+        <p>Edit the library here. Import a template onto a case, then change that case’s copy without affecting other cases.</p>
+      </div>
+      <button class="btn primary" id="new-template">New template</button>
+    </div>
+    <div class="template-list" style="margin-bottom:16px;">
+      ${templates.map((t) => `<button class="chip ${selected?.id === t.id ? "active" : ""}" data-select-template="${t.id}">${escapeHtml(t.name)}</button>`).join("")}
+    </div>
+    ${selected ? `
+      <div class="toolbar">
+        <input class="search" id="template-name" value="${escapeAttr(selected.name)}">
+        <button class="btn" id="save-template-name">Rename</button>
+        <button class="btn" id="clone-template">Duplicate</button>
+      </div>
+      ${STAGE_ORDER.map((stage) => {
+        const rows = items.filter((i) => i.stage === stage).sort((a, b) => a.sequence - b.sequence);
+        return `<section class="stage current">
+          <div class="stage-head"><span>${STAGE_LABEL[stage]}</span><span>${rows.length}</span></div>
+          ${rows.map((i) => `
+            <div class="editor-row">
+              <input data-item-title="${i.id}" value="${escapeAttr(i.title)}">
+              <select data-item-type="${i.id}">${typeOptions(i.default_type)}</select>
+              <button class="btn" data-delete-item="${i.id}">Remove</button>
+            </div>
+          `).join("")}
+          <div class="add-row">
+            <input data-new-item-title="${stage}" placeholder="Add a ${STAGE_LABEL[stage].toLowerCase()} item">
+            <select data-new-item-type="${stage}">${typeOptions("todo")}</select>
+            <button class="btn" data-add-item="${stage}">Add</button>
+          </div>
+        </section>`;
+      }).join("")}
+    ` : `<div class="empty">Create a template to get started.</div>`}
   `;
 }
 
@@ -398,9 +457,11 @@ function drawerHtml() {
           </label>
         </div>
         <div class="actions" style="justify-content:flex-start;margin-bottom:16px;">
+          ${t.status === "upcoming" ? `<button class="btn primary" data-activate="${t.id}">Make current</button>` : ""}
           ${t.status !== "completed" ? `<button class="btn primary" data-complete="${t.id}">Complete</button>` : `<button class="btn" data-reopen="${t.id}">Reopen</button>`}
           <button class="btn" data-skip="${t.id}">Skip / N/A</button>
           <button class="btn" id="save-task">Save</button>
+          <button class="btn" data-delete-task="${t.id}">Remove</button>
         </div>
         <label class="field"><span>Add note</span><textarea id="task-note" rows="3" placeholder="Attempted call, waiting on records…"></textarea></label>
         <button class="btn pink" id="add-note">Save note</button>
@@ -513,6 +574,33 @@ function bind() {
   document.getElementById("create-followup")?.addEventListener("click", createFollowUp);
   document.querySelectorAll("[data-reopen]").forEach((el) => el.addEventListener("click", () => reopenTask(el.dataset.reopen)));
   document.querySelectorAll("[data-skip]").forEach((el) => el.addEventListener("click", () => skipTask(el.dataset.skip)));
+  document.querySelectorAll("[data-activate]").forEach((el) => el.addEventListener("click", () => activateTask(el.dataset.activate)));
+  document.querySelectorAll("[data-delete-task]").forEach((el) => el.addEventListener("click", () => deleteTask(el.dataset.deleteTask)));
+  document.getElementById("import-template-btn")?.addEventListener("click", importSelectedTemplate);
+  document.getElementById("new-template")?.addEventListener("click", createTemplate);
+  document.getElementById("save-template-name")?.addEventListener("click", renameTemplate);
+  document.getElementById("clone-template")?.addEventListener("click", cloneTemplate);
+  document.querySelectorAll("[data-select-template]").forEach((el) => {
+    el.addEventListener("click", () => {
+      state.selectedTemplateId = el.dataset.selectTemplate;
+      render();
+    });
+  });
+  document.querySelectorAll("[data-item-title]").forEach((el) => {
+    el.addEventListener("change", () => saveTemplateItem(el.dataset.itemTitle));
+  });
+  document.querySelectorAll("[data-item-type]").forEach((el) => {
+    el.addEventListener("change", () => saveTemplateItem(el.dataset.itemType));
+  });
+  document.querySelectorAll("[data-delete-item]").forEach((el) => {
+    el.addEventListener("click", () => deleteTemplateItem(el.dataset.deleteItem));
+  });
+  document.querySelectorAll("[data-add-item]").forEach((el) => {
+    el.addEventListener("click", () => addTemplateItem(el.dataset.addItem));
+  });
+  document.querySelectorAll("[data-add-case-task]").forEach((el) => {
+    el.addEventListener("click", () => addCaseTask(el.dataset.addCaseTask));
+  });
 }
 
 function consumeAuthRedirectError() {
@@ -574,15 +662,18 @@ async function loadProfile() {
 }
 
 async function loadWork() {
-  const { data, error } = await supabase
-    .from("checklist_tasks")
-    .select("*, case:cases!inner(id, client_name, case_number, case_type, status)")
-    .eq("status", "active")
-    .eq("case.status", "active")
-    .order("due_at", { ascending: true, nullsFirst: false });
+  const [{ data, error }, { data: names }] = await Promise.all([
+    supabase
+      .from("checklist_tasks")
+      .select("*, case:cases!inner(id, client_name, case_number, case_type, status)")
+      .eq("status", "active")
+      .eq("case.status", "active")
+      .order("due_at", { ascending: true, nullsFirst: false }),
+    supabase.from("checklist_case_overview").select("paralegal_name").eq("case_status", "active"),
+  ]);
   if (error) throw error;
   state.work = (data || []).filter((t) => t.case);
-  state.staff = [...new Set(state.work.map((t) => t.owner_name).filter(Boolean))].sort();
+  state.staff = [...new Set((names || []).map((c) => c.paralegal_name).filter(Boolean))].sort();
 }
 
 async function loadDocket() {
@@ -598,21 +689,165 @@ async function loadDocket() {
 }
 
 async function loadCase(id) {
+  await loadTemplates();
   const [{ data: overview }, { data: tasks }] = await Promise.all([
     supabase.from("checklist_case_overview").select("*").eq("case_id", id).maybeSingle(),
     supabase.from("checklist_tasks").select("*").eq("case_id", id).order("sequence"),
   ]);
   if (!overview) {
-    await supabase.rpc("initialize_case_checklist", { p_case_id: id });
-    return loadCase(id);
+    state.caseDetail = null;
+    state.error = "Case not found.";
+    return;
   }
   state.caseDetail = { overview, tasks: tasks || [] };
   if (state.route.taskId) await openTask(state.route.taskId);
 }
 
 async function loadTemplates() {
-  const { data } = await supabase.from("checklist_template_items").select("*").order("sequence");
-  state.templateItems = data || [];
+  const [{ data: templates }, { data: items }] = await Promise.all([
+    supabase.from("checklist_templates").select("*").eq("active", true).order("created_at"),
+    supabase.from("checklist_template_items").select("*").order("sequence"),
+  ]);
+  state.templates = templates || [];
+  state.templateItems = items || [];
+  if (!state.selectedTemplateId && state.templates[0]) state.selectedTemplateId = state.templates[0].id;
+}
+
+async function importSelectedTemplate() {
+  const templateId = document.getElementById("import-template")?.value;
+  const caseId = state.caseDetail?.overview?.case_id;
+  if (!templateId || !caseId) return;
+  const { error } = await supabase.rpc("import_case_checklist", {
+    p_case_id: caseId,
+    p_template_id: templateId,
+  });
+  if (error) {
+    state.error = error.message;
+    render();
+    return;
+  }
+  await loadCase(caseId);
+  render();
+}
+
+async function createTemplate() {
+  const name = window.prompt("Template name", "New template");
+  if (!name) return;
+  const { data, error } = await supabase.from("checklist_templates").insert({
+    name,
+    case_type: "custom",
+    version: 1,
+    active: true,
+  }).select().maybeSingle();
+  if (error) {
+    state.error = error.message;
+    render();
+    return;
+  }
+  state.selectedTemplateId = data.id;
+  await loadTemplates();
+  render();
+}
+
+async function renameTemplate() {
+  const name = document.getElementById("template-name")?.value?.trim();
+  if (!name || !state.selectedTemplateId) return;
+  await supabase.from("checklist_templates").update({ name }).eq("id", state.selectedTemplateId);
+  await loadTemplates();
+  render();
+}
+
+async function cloneTemplate() {
+  const source = (state.templates || []).find((t) => t.id === state.selectedTemplateId);
+  if (!source) return;
+  const { data: created, error } = await supabase.from("checklist_templates").insert({
+    name: `${source.name} copy`,
+    case_type: source.case_type,
+    version: 1,
+    active: true,
+  }).select().maybeSingle();
+  if (error) {
+    state.error = error.message;
+    render();
+    return;
+  }
+  const items = (state.templateItems || []).filter((i) => i.template_id === source.id).map((i) => ({
+    template_id: created.id,
+    title: i.title,
+    stage: i.stage,
+    default_type: i.default_type,
+    default_owner_role: i.default_owner_role,
+    sequence: i.sequence,
+    default_due_rule: i.default_due_rule,
+  }));
+  if (items.length) await supabase.from("checklist_template_items").insert(items);
+  state.selectedTemplateId = created.id;
+  await loadTemplates();
+  render();
+}
+
+async function saveTemplateItem(id) {
+  const title = document.querySelector(`[data-item-title="${id}"]`)?.value?.trim();
+  const type = document.querySelector(`[data-item-type="${id}"]`)?.value;
+  if (!title) return;
+  await supabase.from("checklist_template_items").update({ title, default_type: type }).eq("id", id);
+  await loadTemplates();
+}
+
+async function deleteTemplateItem(id) {
+  await supabase.from("checklist_template_items").delete().eq("id", id);
+  await loadTemplates();
+  render();
+}
+
+async function addTemplateItem(stage) {
+  const title = document.querySelector(`[data-new-item-title="${stage}"]`)?.value?.trim();
+  const type = document.querySelector(`[data-new-item-type="${stage}"]`)?.value || "todo";
+  if (!title || !state.selectedTemplateId) return;
+  const existing = (state.templateItems || []).filter((i) => i.template_id === state.selectedTemplateId);
+  const sequence = Math.max(0, ...existing.map((i) => i.sequence)) + 10;
+  await supabase.from("checklist_template_items").insert({
+    template_id: state.selectedTemplateId,
+    title,
+    stage,
+    default_type: type,
+    default_owner_role: "paralegal",
+    sequence,
+    default_due_rule: "manual",
+  });
+  await loadTemplates();
+  render();
+}
+
+async function addCaseTask(stage) {
+  const title = document.querySelector(`[data-new-task-title="${stage}"]`)?.value?.trim();
+  const type = document.querySelector(`[data-new-task-type="${stage}"]`)?.value || "todo";
+  const caseId = state.caseDetail?.overview?.case_id;
+  if (!title || !caseId) return;
+  const sequence = Math.max(0, ...(state.caseDetail.tasks || []).map((t) => t.sequence)) + 10;
+  await supabase.from("checklist_tasks").insert({
+    case_id: caseId,
+    title,
+    stage,
+    sequence,
+    owner_name: state.caseDetail.overview.paralegal_name,
+    owner_role: "paralegal",
+    status: "upcoming",
+    type,
+  });
+  await loadCase(caseId);
+  render();
+}
+
+async function activateTask(id) {
+  await supabase.from("checklist_tasks").update({ status: "active" }).eq("id", id);
+  await refreshAfterChange(id);
+}
+
+async function deleteTask(id) {
+  await supabase.from("checklist_tasks").delete().eq("id", id);
+  state.drawerTask = null;
+  await loadRoute();
 }
 
 async function openTask(taskId, caseId) {
