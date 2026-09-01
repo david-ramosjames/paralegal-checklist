@@ -45,6 +45,7 @@ const state = {
   caseDetail: null,
   drawerTask: null,
   events: [],
+  drawerParalegal: "",
   staff: [],
   templates: [],
   selectedTemplateId: null,
@@ -52,6 +53,8 @@ const state = {
   search: "",
   staffFilter: "",
   error: "",
+  caseNotes: [],
+  expandedNotes: {},
 };
 
 function parseRoute() {
@@ -93,6 +96,37 @@ function dueClass(value) {
 
 function badge(type) {
   return `<span class="badge ${type}">${TYPE_LABEL[type] || type}</span>`;
+}
+
+function taskTypes(task) {
+  const raw = Array.isArray(task?.types) && task.types.length ? task.types : [task?.type].filter(Boolean);
+  return TYPE_ORDER.filter((type) => raw.includes(type));
+}
+
+function typeBadges(task) {
+  const types = taskTypes(task);
+  return types.length ? types.map(badge).join(" ") : badge("todo");
+}
+
+function primaryType(task) {
+  return taskTypes(task)[0] || "todo";
+}
+
+function taskHas(task, type) {
+  return taskTypes(task).includes(type);
+}
+
+function taskOwners(task) {
+  const extra = Array.isArray(task?.additional_owners) ? task.additional_owners : [];
+  return [task?.owner_name, ...extra].filter(Boolean);
+}
+
+function notesFor(taskId) {
+  return (state.caseNotes || []).filter((n) => n.task_id === taskId);
+}
+
+function caseParalegal() {
+  return state.drawerParalegal || state.caseDetail?.overview?.paralegal_name || "";
 }
 
 function riskBadge(risk) {
@@ -180,8 +214,8 @@ function workHtml() {
   const rows = visibleWork();
   const overdue = state.work.filter((t) => t.due_at && t.due_at < todayISO()).length;
   const dueToday = state.work.filter((t) => t.due_at === todayISO()).length;
-  const calls = state.work.filter((t) => ["urgent_client", "client_contact", "other_call"].includes(t.type)).length;
-  const deadlines = state.work.filter((t) => t.type === "deadline").length;
+  const calls = state.work.filter((t) => taskTypes(t).some((type) => ["urgent_client", "client_contact", "other_call"].includes(type))).length;
+  const deadlines = state.work.filter((t) => taskHas(t, "deadline")).length;
 
   return `
     <div class="page-head">
@@ -226,7 +260,7 @@ function workRow(task) {
         <div class="task-title">${escapeHtml(task.title)}</div>
       </div>
       <div class="due ${dueClass(task.due_at)}">${formatDue(task.due_at)}</div>
-      <div>${badge(task.type)}</div>
+      <div>${typeBadges(task)}</div>
       <div class="actions">
         <button class="btn primary" data-complete="${task.id}">Complete</button>
         <button class="btn" data-reschedule="${task.id}" data-when="tomorrow">Tomorrow</button>
@@ -243,10 +277,10 @@ function visibleWork() {
     .filter((t) => {
       const hay = `${t.title} ${t.case?.client_name || ""} ${t.case?.case_number || ""}`.toLowerCase();
       if (state.search && !hay.includes(state.search.toLowerCase())) return false;
-      if (state.staffFilter && t.owner_name !== state.staffFilter) return false;
+      if (state.staffFilter && !taskOwners(t).includes(state.staffFilter)) return false;
       if (state.filter === "mine") {
         const me = state.profile?.staff_label;
-        return (me && t.owner_name === me) || t.owner_id === state.user.id;
+        return (me && taskOwners(t).includes(me)) || t.owner_id === state.user.id;
       }
       if (state.filter === "today") return !t.due_at || t.due_at <= today;
       if (state.filter === "upcoming") return t.due_at && t.due_at > today;
@@ -256,7 +290,7 @@ function visibleWork() {
       const ad = a.due_at || "9999-99-99";
       const bd = b.due_at || "9999-99-99";
       if (ad !== bd) return ad.localeCompare(bd);
-      return TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type);
+      return TYPE_ORDER.indexOf(primaryType(a)) - TYPE_ORDER.indexOf(primaryType(b));
     });
 }
 
@@ -290,7 +324,7 @@ function casesHtml() {
             <div class="case-name">${escapeHtml(c.client_name || "Untitled")}</div>
             <div class="muted">#${escapeHtml(c.case_number || "—")}</div>
           </div>
-          <div>${STAGE_LABEL[c.stage] || c.litigation_status || "—"}</div>
+          <div>${escapeHtml(c.litigation_status || "—")}</div>
           <div>${c.next_action ? escapeHtml(c.next_action) : '<span class="muted">Needs plan</span>'}</div>
           <div class="due ${dueClass(c.next_due_at)}">${formatDue(c.next_due_at)}</div>
           <div>${riskBadge(c.risk)}</div>
@@ -314,7 +348,7 @@ function caseHtml() {
         <h1 style="margin:8px 0 0;font-family:var(--serif);font-size:40px;">${escapeHtml(c.overview.client_name)}</h1>
         <div class="meta">
           <span class="badge todo">#${escapeHtml(c.overview.case_number || "—")}</span>
-          <span class="badge todo">${STAGE_LABEL[c.overview.stage] || "Intake"}</span>
+          <span class="badge todo">${escapeHtml(c.overview.litigation_status || "Intake")}</span>
           ${c.overview.paralegal_name ? `<span class="badge todo">${escapeHtml(c.overview.paralegal_name)}</span>` : ""}
           ${c.overview.attorney_name ? `<span class="badge todo">${escapeHtml(c.overview.attorney_name)}</span>` : ""}
         </div>
@@ -331,7 +365,7 @@ function caseHtml() {
         <div class="card next-card" data-open-task="${t.id}">
           <div class="label">${formatDue(t.due_at)}</div>
           <div style="font-weight:600;margin:8px 0;">${escapeHtml(t.title)}</div>
-          ${badge(t.type)}
+          ${typeBadges(t)}
         </div>
       `).join("") : `<div class="card">No active next action. Open an item and mark it current.</div>`}
     </div>
@@ -369,14 +403,34 @@ function stageBlock(c, stage, editable) {
         <span class="muted">${done}/${items.length}</span>
       </button>
       <div data-stage-body="${stage}" style="${open ? "" : "display:none"}">
-        ${items.map((t) => `
-          <button class="stage-item ${t.status}" data-open-task="${t.id}">
-            <span class="dot ${t.status}"></span>
-            <span class="title">${escapeHtml(t.title)}</span>
-            <span class="due ${dueClass(t.due_at)}">${t.status === "active" ? formatDue(t.due_at) : ""}</span>
-            ${t.status === "active" ? badge(t.type) : `<span class="muted">${t.status}</span>`}
-          </button>
-        `).join("")}
+        ${items.map((t) => {
+          const notes = notesFor(t.id);
+          const open = Boolean(state.expandedNotes[t.id]);
+          return `
+          <div class="task-block ${t.status}">
+            <div class="stage-item ${t.status}">
+              <span class="dot ${t.status}"></span>
+              <button class="title-btn" data-open-task="${t.id}">${escapeHtml(t.title)}</button>
+              <span class="due ${dueClass(t.due_at)}">${t.status === "active" ? formatDue(t.due_at) : ""}</span>
+              <span class="type-stack">${typeBadges(t)}</span>
+              <button class="note-count ${notes.length ? "has-notes" : ""}" data-toggle-notes="${t.id}" aria-expanded="${open}">Notes ${notes.length}</button>
+            </div>
+            ${open ? `
+              <div class="inline-notes">
+                ${notes.length ? notes.map((n) => `
+                  <div class="note-card">
+                    <div>${escapeHtml(n.body)}</div>
+                    <div class="muted">${new Date(n.created_at).toLocaleString()}${n.actor_name ? ` · ${escapeHtml(n.actor_name)}` : ""}</div>
+                  </div>
+                `).join("") : `<div class="muted">No notes yet.</div>`}
+                <div class="inline-note-add">
+                  <input data-inline-note="${t.id}" placeholder="Add a note">
+                  <button class="btn pink" data-add-inline-note="${t.id}">Add</button>
+                </div>
+              </div>
+            ` : ""}
+          </div>`;
+        }).join("")}
         ${editable ? `
           <div class="add-row">
             <input data-new-task-title="${stage}" placeholder="Add a task on this case">
@@ -438,23 +492,49 @@ function templatesHtml() {
 
 function drawerHtml() {
   const t = state.drawerTask;
+  const types = taskTypes(t);
+  const paralegal = caseParalegal();
+  const extra = (t.additional_owners || []).filter((name) => name && name !== (t.owner_name || paralegal));
+  const addable = state.staff.filter((name) => name !== (t.owner_name || paralegal) && !extra.includes(name));
+  const notes = notesFor(t.id);
+  const history = (state.events || []).filter((e) => e.event_type !== "note");
   return `
     <div class="drawer-backdrop" id="drawer-backdrop">
       <aside class="drawer">
         <div class="muted">${STAGE_LABEL[t.stage] || t.stage}</div>
         <h2 style="font-family:var(--serif);margin:6px 0 12px;">${escapeHtml(t.title)}</h2>
-        ${badge(t.type)}
+        <div class="type-stack">${typeBadges(t)}</div>
         <div class="meta" style="margin:16px 0;">
           <label class="field"><span>Due</span><input type="date" id="task-due" value="${t.due_at || ""}"></label>
-          <label class="field"><span>Type</span>
-            <select id="task-type">${TYPE_ORDER.map((type) => `<option value="${type}" ${t.type === type ? "selected" : ""}>${TYPE_LABEL[type]}</option>`).join("")}</select>
-          </label>
+          <div class="field">
+            <span>Types</span>
+            <div class="flag-grid">
+              ${TYPE_ORDER.map((type) => `
+                <label class="flag">
+                  <input type="checkbox" name="task-types" value="${type}" ${types.includes(type) ? "checked" : ""}>
+                  ${TYPE_LABEL[type]}
+                </label>
+              `).join("")}
+            </div>
+          </div>
           <label class="field"><span>Owner</span>
             <select id="task-owner">
-              <option value="">Unassigned</option>
-              ${state.staff.map((name) => `<option value="${escapeAttr(name)}" ${t.owner_name === name ? "selected" : ""}>${name}</option>`).join("")}
+              ${paralegal ? `<option value="${escapeAttr(paralegal)}" ${(!t.owner_name || t.owner_name === paralegal) ? "selected" : ""}>${escapeHtml(paralegal)} (case paralegal)</option>` : `<option value="">Unassigned</option>`}
+              ${state.staff.filter((name) => name !== paralegal).map((name) => `<option value="${escapeAttr(name)}" ${t.owner_name === name ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}
             </select>
           </label>
+          <div class="field">
+            <span>Additional owners</span>
+            <div class="owner-chips">
+              ${extra.map((name) => `<span class="chip-owner">${escapeHtml(name)} <button type="button" data-remove-owner="${escapeAttr(name)}">×</button></span>`).join("") || `<span class="muted">None</span>`}
+            </div>
+            ${addable.length ? `
+              <select id="add-owner">
+                <option value="">Add owner…</option>
+                ${addable.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join("")}
+              </select>
+            ` : ""}
+          </div>
         </div>
         <div class="actions" style="justify-content:flex-start;margin-bottom:16px;">
           ${t.status === "upcoming" ? `<button class="btn primary" data-activate="${t.id}">Make current</button>` : ""}
@@ -462,6 +542,15 @@ function drawerHtml() {
           <button class="btn" data-skip="${t.id}">Skip / N/A</button>
           <button class="btn" id="save-task">Save</button>
           <button class="btn" data-delete-task="${t.id}">Remove</button>
+        </div>
+        <h3 style="margin:24px 0 8px;font-family:var(--serif);">Notes</h3>
+        <div class="notes-list">
+          ${notes.length ? notes.map((n) => `
+            <div class="note-card">
+              <div>${escapeHtml(n.body)}</div>
+              <div class="muted">${new Date(n.created_at).toLocaleString()}${n.actor_name ? ` · ${escapeHtml(n.actor_name)}` : ""}</div>
+            </div>
+          `).join("") : `<div class="muted">No notes yet.</div>`}
         </div>
         <label class="field"><span>Add note</span><textarea id="task-note" rows="3" placeholder="Attempted call, waiting on records…"></textarea></label>
         <button class="btn pink" id="add-note">Save note</button>
@@ -472,11 +561,10 @@ function drawerHtml() {
         </div>
         <h3 style="margin:24px 0 8px;font-family:var(--serif);">History</h3>
         <div class="history">
-          ${state.events.length ? state.events.map((e) => `
+          ${history.length ? history.map((e) => `
             <div class="history-item">
               <div><strong>${eventLabel(e)}</strong></div>
               <div class="muted">${new Date(e.created_at).toLocaleString()} ${e.actor_name ? `· ${escapeHtml(e.actor_name)}` : ""}</div>
-              ${e.note ? `<div>${escapeHtml(e.note)}</div>` : ""}
             </div>
           `).join("") : `<div class="muted">No history yet.</div>`}
         </div>
@@ -601,6 +689,37 @@ function bind() {
   document.querySelectorAll("[data-add-case-task]").forEach((el) => {
     el.addEventListener("click", () => addCaseTask(el.dataset.addCaseTask));
   });
+  document.querySelectorAll("[data-toggle-notes]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = el.dataset.toggleNotes;
+      state.expandedNotes[id] = !state.expandedNotes[id];
+      render();
+    });
+  });
+  document.querySelectorAll("[data-add-inline-note]").forEach((el) => {
+    el.addEventListener("click", () => addInlineNote(el.dataset.addInlineNote));
+  });
+  document.querySelectorAll("[data-inline-note]").forEach((el) => {
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") addInlineNote(el.dataset.inlineNote);
+    });
+  });
+  document.getElementById("add-owner")?.addEventListener("change", async (e) => {
+    const name = e.target.value;
+    if (!name || !state.drawerTask) return;
+    const extra = [...new Set([...(state.drawerTask.additional_owners || []), name])];
+    await supabase.from("checklist_tasks").update({ additional_owners: extra }).eq("id", state.drawerTask.id);
+    await refreshAfterChange(state.drawerTask.id);
+  });
+  document.querySelectorAll("[data-remove-owner]").forEach((el) => {
+    el.addEventListener("click", async () => {
+      const name = el.dataset.removeOwner;
+      const extra = (state.drawerTask.additional_owners || []).filter((owner) => owner !== name);
+      await supabase.from("checklist_tasks").update({ additional_owners: extra }).eq("id", state.drawerTask.id);
+      await refreshAfterChange(state.drawerTask.id);
+    });
+  });
 }
 
 function consumeAuthRedirectError() {
@@ -699,7 +818,16 @@ async function loadCase(id) {
     state.error = "Case not found.";
     return;
   }
+  const ids = (tasks || []).map((t) => t.id);
+  let notes = [];
+  if (ids.length) {
+    const { data } = await supabase.from("checklist_task_notes").select("*").in("task_id", ids).order("created_at");
+    notes = data || [];
+  }
+  state.caseNotes = notes;
   state.caseDetail = { overview, tasks: tasks || [] };
+  const names = [overview.paralegal_name, overview.attorney_name, ...state.staff];
+  state.staff = [...new Set(names.filter(Boolean))].sort();
   if (state.route.taskId) await openTask(state.route.taskId);
 }
 
@@ -834,6 +962,7 @@ async function addCaseTask(stage) {
     owner_role: "paralegal",
     status: "upcoming",
     type,
+    types: [type],
   });
   await loadCase(caseId);
   render();
@@ -858,7 +987,22 @@ async function openTask(taskId, caseId) {
   }
   if (!task) return;
   if (caseId && state.route.name !== "case") location.hash = `#/cases/${caseId}?task=${taskId}`;
-  const { data: events } = await supabase.from("checklist_task_events").select("*").eq("task_id", taskId).order("created_at", { ascending: false });
+  const [{ data: events }, { data: notes }, { data: overview }] = await Promise.all([
+    supabase.from("checklist_task_events").select("*").eq("task_id", taskId).order("created_at", { ascending: false }),
+    supabase.from("checklist_task_notes").select("*").eq("task_id", taskId).order("created_at"),
+    supabase.from("checklist_case_overview").select("paralegal_name, attorney_name").eq("case_id", task.case_id).maybeSingle(),
+  ]);
+  state.drawerParalegal = overview?.paralegal_name || state.caseDetail?.overview?.paralegal_name || "";
+  const names = [state.drawerParalegal, overview?.attorney_name, ...state.staff];
+  state.staff = [...new Set(names.filter(Boolean))].sort();
+  if (!task.owner_name && state.drawerParalegal) {
+    await supabase.from("checklist_tasks").update({ owner_name: state.drawerParalegal, owner_role: "paralegal" }).eq("id", task.id);
+    task = { ...task, owner_name: state.drawerParalegal };
+  }
+  state.caseNotes = [
+    ...(state.caseNotes || []).filter((n) => n.task_id !== taskId),
+    ...(notes || []),
+  ];
   state.drawerTask = task;
   state.events = events || [];
   render();
@@ -893,26 +1037,48 @@ async function rescheduleTask(id, when) {
 
 async function saveTask() {
   const t = state.drawerTask;
+  const types = [...document.querySelectorAll("input[name='task-types']:checked")].map((el) => el.value);
+  const owner = document.getElementById("task-owner").value || caseParalegal() || null;
   await supabase.from("checklist_tasks").update({
     due_at: document.getElementById("task-due").value || null,
-    type: document.getElementById("task-type").value,
-    owner_name: document.getElementById("task-owner").value || null,
+    types: types.length ? types : ["todo"],
+    type: types.length ? TYPE_ORDER.find((type) => types.includes(type)) : "todo",
+    owner_name: owner,
   }).eq("id", t.id);
   await refreshAfterChange(t.id);
 }
 
 async function addNote() {
-  const note = document.getElementById("task-note").value.trim();
-  if (!note) return;
-  await supabase.from("checklist_task_events").insert({
-    task_id: state.drawerTask.id,
-    event_type: "note",
-    note,
+  await saveNote(state.drawerTask?.id, document.getElementById("task-note")?.value);
+}
+
+async function addInlineNote(taskId) {
+  const input = document.querySelector(`[data-inline-note="${taskId}"]`);
+  await saveNote(taskId, input?.value);
+  state.expandedNotes[taskId] = true;
+}
+
+async function saveNote(taskId, raw) {
+  const body = String(raw || "").trim();
+  if (!taskId || !body) return;
+  const { error } = await supabase.from("checklist_task_notes").insert({
+    task_id: taskId,
+    body,
     actor_id: state.user.id,
     actor_name: state.profile?.display_name || state.user.email,
   });
-  document.getElementById("task-note").value = "";
-  await openTask(state.drawerTask.id);
+  if (error) {
+    state.error = error.message;
+    render();
+    return;
+  }
+  const { data: notes } = await supabase.from("checklist_task_notes").select("*").eq("task_id", taskId).order("created_at");
+  state.caseNotes = [
+    ...(state.caseNotes || []).filter((n) => n.task_id !== taskId),
+    ...(notes || []),
+  ];
+  if (state.drawerTask?.id === taskId) await openTask(taskId);
+  else render();
 }
 
 async function createFollowUp() {
@@ -924,10 +1090,12 @@ async function createFollowUp() {
     title: `Follow up: ${t.title}`,
     stage: t.stage,
     sequence: t.sequence + 1,
-    owner_name: t.owner_name,
+    owner_name: t.owner_name || caseParalegal(),
     owner_role: t.owner_role,
     status: "active",
-    type: t.type,
+    type: primaryType(t),
+    types: taskTypes(t),
+    additional_owners: t.additional_owners || [],
     due_at: due,
   }).select().maybeSingle();
   if (data) {
