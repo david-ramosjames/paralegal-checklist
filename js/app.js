@@ -209,7 +209,14 @@ function formatPhone(value) {
 function languageLine(label, value) {
   if (!value) return "";
   const flag = LANGUAGE_FLAG[value] || "";
-  return `<div>${label} ${flag ? `${flag} ` : ""}${escapeHtml(value)}</div>`;
+  return `${flag ? `${flag} ` : ""}${escapeHtml(value)}`;
+}
+
+function quoConversationUrl(conversationId, phoneNumberId) {
+  if (!conversationId) return null;
+  const conversation = encodeURIComponent(conversationId);
+  if (phoneNumberId) return `https://my.openphone.com/inbox/${encodeURIComponent(phoneNumberId)}/${conversation}`;
+  return `https://my.openphone.com/inbox?conversationId=${conversation}`;
 }
 
 function navLink(href, label, name) {
@@ -420,7 +427,15 @@ function caseHtml() {
     facts.caseType || c.overview.case_type,
     facts.dateOfIncident ? `DOL ${facts.dateOfIncident}` : "",
   ].filter(Boolean).join(" · ");
+  const langs = [facts.preferredLanguage, facts.secondaryLanguage].filter(Boolean).map((lang) => languageLine("", lang)).filter(Boolean);
   const quo = facts.quoContacts || [];
+  const staff = [
+    ["Attorney", c.overview.attorney_name],
+    ["Paralegal", c.overview.paralegal_name],
+    ["Legal assistant", facts.legalAssistant],
+    ["Date signed", facts.dateSigned],
+    ["Last reviewed", facts.lastReviewed],
+  ].filter(([, value]) => value);
   return `
     <a href="#/cases" class="muted">← Docket</a>
     <div class="facts-card">
@@ -432,35 +447,29 @@ function caseHtml() {
         <div class="meta">
           ${facts.expectedLitigation ? `<span class="badge todo">${escapeHtml(facts.expectedLitigation === "Litigation" ? "Lit" : facts.expectedLitigation)}</span>` : ""}
           ${facts.status ? `<span class="badge todo">${escapeHtml(facts.status)}</span>` : ""}
+          <span class="badge todo">${escapeHtml(c.overview.litigation_status || "Intake")}</span>
         </div>
       </div>
-      <div class="facts-links">
-        ${slack ? `<a target="_blank" rel="noreferrer" href="${escapeAttr(slack)}">Slack channel ${escapeHtml(slackName)}</a>` : ""}
-        <span class="badge todo">Sheet status: ${escapeHtml(c.overview.litigation_status || "—")}</span>
-      </div>
-      <div class="facts-langs">
-        ${languageLine("Primary language", facts.preferredLanguage)}
-        ${languageLine("Secondary language", facts.secondaryLanguage)}
-      </div>
-      ${quo.length ? `
-        <div class="facts-quo">
-          <div class="label">Quo contacts</div>
-          ${quo.map((q) => `
-            <div class="quo-row">
-              ${q.sms_enabled ? "SMS on " : ""}${escapeHtml(q.display_name || c.overview.client_name)}
+      ${facts.description ? `<div class="facts-desc">${escapeHtml(facts.description)}</div>` : ""}
+      <div class="facts-inline">
+        ${slack ? `<a target="_blank" rel="noreferrer" href="${escapeAttr(slack)}">${escapeHtml(slackName)}</a>` : ""}
+        ${langs.length ? `<span>${langs.join(" · ")}</span>` : ""}
+        ${quo.map((q) => {
+          const convo = quoConversationUrl(q.quo_conversation_id, q.quo_phone_number_id);
+          return `
+            <span class="quo-row">
+              ${q.sms_enabled ? "SMS " : ""}${escapeHtml(q.display_name || c.overview.client_name)}
               ${q.phone ? `<a href="tel:${escapeAttr(q.phone)}">${escapeHtml(formatPhone(q.phone))}</a>` : ""}
-            </div>
-          `).join("")}
+              ${convo ? `<a target="_blank" rel="noreferrer" href="${escapeAttr(convo)}">Quo conversation</a>` : ""}
+            </span>`;
+        }).join("")}
+      </div>
+      ${staff.length ? `
+        <div class="facts-staff">
+          ${staff.map(([label, value]) => `<div class="staff-fact"><span class="label">${label}</span><span class="value">${escapeHtml(value)}</span></div>`).join("")}
         </div>
       ` : ""}
-      <div class="facts-grid">
-        <div><div class="label">Attorney</div><div class="value">${escapeHtml(c.overview.attorney_name || "—")}</div></div>
-        <div><div class="label">Paralegal</div><div class="value">${escapeHtml(c.overview.paralegal_name || "—")}</div></div>
-        <div><div class="label">Legal assistant</div><div class="value">${escapeHtml(facts.legalAssistant || "—")}</div></div>
-        <div><div class="label">Date signed</div><div class="value">${escapeHtml(facts.dateSigned || "—")}</div></div>
-        <div><div class="label">Last reviewed</div><div class="value">${escapeHtml(facts.lastReviewed || "—")}</div></div>
-      </div>
-      <div class="link-row" style="margin-top:16px;">
+      <div class="link-row">
         <a class="btn" target="_blank" rel="noreferrer" href="${tracker}">Case Tracker</a>
         <a class="btn" target="_blank" rel="noreferrer" href="${docketFlow}">DocketFlow</a>
         ${slack ? `<a class="btn" target="_blank" rel="noreferrer" href="${escapeAttr(slack)}">Slack</a>` : ""}
@@ -946,7 +955,7 @@ async function loadCase(id) {
     return;
   }
   const [{ data: tracker }, { data: notes }] = await Promise.all([
-    supabase.from("case_tracker_entries").select("id, expected_litigation, last_reviewed_at, date_signed_override, client_phone").eq("case_number", overview.case_number).eq("is_active", true).order("updated_at", { ascending: false }).limit(1).maybeSingle(),
+    supabase.from("case_tracker_entries").select("id, expected_litigation, last_reviewed_at, date_signed_override, client_phone, case_description, quo_contact_id, quo_conversation_id, quo_phone_number_id").eq("case_number", overview.case_number).eq("is_active", true).order("updated_at", { ascending: false }).limit(1).maybeSingle(),
     (tasks || []).length
       ? supabase.from("checklist_task_notes").select("*").in("task_id", (tasks || []).map((t) => t.id)).order("created_at")
       : Promise.resolve({ data: [] }),
@@ -957,10 +966,15 @@ async function loadCase(id) {
       ? supabase.from("contacts").select("id, name, role").in("id", assignedIds)
       : Promise.resolve({ data: [] }),
     tracker?.id
-      ? supabase.from("case_quo_contacts").select("display_name, phone, sms_enabled").eq("tracker_entry_id", tracker.id)
+      ? supabase.from("case_quo_contacts").select("display_name, phone, sms_enabled, quo_contact_id, quo_conversation_id, quo_phone_number_id").eq("tracker_entry_id", tracker.id)
       : Promise.resolve({ data: [] }),
   ]);
   const assistant = (staffContacts || []).find((person) => person.role === "legal_assistant");
+  const quoRows = (quo && quo.length)
+    ? quo
+    : (tracker?.client_phone || tracker?.quo_conversation_id
+      ? [{ display_name: overview.client_name, phone: tracker.client_phone, sms_enabled: Boolean(tracker.client_phone) }]
+      : []);
   const facts = {
     caseType: caseRow?.case_type || overview.case_type || "",
     status: caseRow?.status ? String(caseRow.status).replace(/^./, (ch) => ch.toUpperCase()) : "",
@@ -971,9 +985,13 @@ async function loadCase(id) {
     legalAssistant: assistant?.name || "",
     dateSigned: formatLongDate(tracker?.date_signed_override || caseRow?.created_at),
     lastReviewed: formatLongDate(tracker?.last_reviewed_at),
-    quoContacts: (quo && quo.length)
-      ? quo
-      : (tracker?.client_phone ? [{ display_name: overview.client_name, phone: tracker.client_phone, sms_enabled: true }] : []),
+    description: String(tracker?.case_description || "").trim(),
+    quoContacts: quoRows.map((row, index) => ({
+      ...row,
+      quo_conversation_id: row.quo_conversation_id || (index === 0 ? tracker?.quo_conversation_id : null),
+      quo_phone_number_id: row.quo_phone_number_id || (index === 0 ? tracker?.quo_phone_number_id : null),
+      quo_contact_id: row.quo_contact_id || (index === 0 ? tracker?.quo_contact_id : null),
+    })),
   };
   state.caseNotes = notes || [];
   state.caseDetail = { overview, tasks: tasks || [], facts };
