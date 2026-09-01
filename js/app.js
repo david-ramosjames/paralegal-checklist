@@ -35,6 +35,20 @@ const RISK_LABEL = {
   on_track: "On track",
   needs_plan: "Needs plan",
 };
+const CASE_TRACKER_CASE = "https://rjl-case-tracker.vercel.app/cases";
+const DOCKET_FLOW_CASE = "https://rjl-docket-flow.vercel.app/cases";
+const LANGUAGE_FLAG = {
+  Spanish: "🇪🇸",
+  English: "🇺🇸",
+  Portuguese: "🇧🇷",
+  French: "🇫🇷",
+  Arabic: "🇸🇦",
+  Vietnamese: "🇻🇳",
+  Chinese: "🇨🇳",
+  Korean: "🇰🇷",
+  German: "🇩🇪",
+  Italian: "🇮🇹",
+};
 
 const state = {
   user: null,
@@ -55,6 +69,7 @@ const state = {
   error: "",
   caseNotes: [],
   expandedNotes: {},
+  editingNoteId: null,
 };
 
 function parseRoute() {
@@ -125,6 +140,32 @@ function notesFor(taskId) {
   return (state.caseNotes || []).filter((n) => n.task_id === taskId);
 }
 
+function noteCardHtml(n) {
+  const editing = state.editingNoteId === n.id;
+  const edited = n.updated_at && new Date(n.updated_at).getTime() - new Date(n.created_at).getTime() > 1000;
+  if (editing) {
+    return `
+      <div class="note-card">
+        <textarea data-edit-note-body="${n.id}" rows="3">${escapeHtml(n.body)}</textarea>
+        <div class="note-actions">
+          <button class="btn pink" data-save-note="${n.id}">Save</button>
+          <button class="btn" data-cancel-note="${n.id}">Cancel</button>
+        </div>
+      </div>`;
+  }
+  return `
+    <div class="note-card">
+      <div class="note-head">
+        <div class="note-body">${escapeHtml(n.body)}</div>
+        <div class="note-actions">
+          <button class="btn ghost" data-edit-note="${n.id}">Edit</button>
+          <button class="btn ghost" data-delete-note="${n.id}">Delete</button>
+        </div>
+      </div>
+      <div class="muted">${new Date(n.created_at).toLocaleString()}${n.actor_name ? ` · ${escapeHtml(n.actor_name)}` : ""}${edited ? " · edited" : ""}</div>
+    </div>`;
+}
+
 function caseParalegal() {
   return state.drawerParalegal || state.caseDetail?.overview?.paralegal_name || "";
 }
@@ -134,12 +175,41 @@ function riskBadge(risk) {
 }
 
 function slackUrl(channelId) {
-  return channelId ? `https://slack.com/app_redirect?channel=${channelId}` : null;
+  if (!channelId) return null;
+  if (/^https?:\/\//i.test(channelId)) return channelId;
+  return `https://ramosjames.slack.com/archives/${channelId}`;
 }
 
 function dropboxUrl(path) {
   if (!path) return null;
   return `https://www.dropbox.com/home${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+function compareCaseNumber(a, b) {
+  return String(a.case_number || "").localeCompare(String(b.case_number || ""), undefined, { numeric: true, sensitivity: "base" });
+}
+
+function formatLongDate(value) {
+  if (value == null || value === "") return "";
+  const asNumber = Number(value);
+  const date = Number.isFinite(asNumber) && String(value).trim() !== "" && !String(value).includes("-")
+    ? new Date(asNumber)
+    : new Date(/^\d{4}-\d{2}-\d{2}/.test(String(value)) ? `${String(value).slice(0, 10)}T00:00:00` : value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+function formatPhone(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  const local = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  if (local.length === 10) return `(${local.slice(0, 3)}) ${local.slice(3, 6)}-${local.slice(6)}`;
+  return value || "";
+}
+
+function languageLine(label, value) {
+  if (!value) return "";
+  const flag = LANGUAGE_FLAG[value] || "";
+  return `<div>${label} ${flag ? `${flag} ` : ""}${escapeHtml(value)}</div>`;
 }
 
 function navLink(href, label, name) {
@@ -301,7 +371,7 @@ function casesHtml() {
     if (q && !hay.includes(q)) return false;
     if (state.staffFilter && c.paralegal_name !== state.staffFilter) return false;
     return true;
-  });
+  }).sort(compareCaseNumber);
   return `
     <div class="page-head">
       <div>
@@ -338,23 +408,62 @@ function casesHtml() {
 function caseHtml() {
   const c = state.caseDetail;
   if (!c) return `<div class="empty">Loading case…</div>`;
+  const facts = c.facts || {};
   const active = c.tasks.filter((t) => t.status === "active").slice(0, 3);
   const slack = slackUrl(c.overview.slack_channel_id);
   const dropbox = dropboxUrl(c.overview.dropbox_case_path);
+  const tracker = `${CASE_TRACKER_CASE}/${c.overview.case_id}`;
+  const docketFlow = `${DOCKET_FLOW_CASE}/${c.overview.case_id}`;
+  const slackName = c.overview.slack_channel_name ? `#${c.overview.slack_channel_name.replace(/^#/, "")}` : "Slack channel";
+  const summary = [
+    c.overview.case_number,
+    facts.caseType || c.overview.case_type,
+    facts.dateOfIncident ? `DOL ${facts.dateOfIncident}` : "",
+  ].filter(Boolean).join(" · ");
+  const quo = facts.quoContacts || [];
   return `
-    <div class="case-header">
-      <div>
-        <a href="#/cases" class="muted">← Docket</a>
-        <h1 style="margin:8px 0 0;font-family:var(--serif);font-size:40px;">${escapeHtml(c.overview.client_name)}</h1>
+    <a href="#/cases" class="muted">← Docket</a>
+    <div class="facts-card">
+      <div class="facts-top">
+        <div>
+          <h1>${escapeHtml(c.overview.client_name)}</h1>
+          <div class="facts-summary">${escapeHtml(summary)}</div>
+        </div>
         <div class="meta">
-          <span class="badge todo">#${escapeHtml(c.overview.case_number || "—")}</span>
-          <span class="badge todo">${escapeHtml(c.overview.litigation_status || "Intake")}</span>
-          ${c.overview.paralegal_name ? `<span class="badge todo">${escapeHtml(c.overview.paralegal_name)}</span>` : ""}
-          ${c.overview.attorney_name ? `<span class="badge todo">${escapeHtml(c.overview.attorney_name)}</span>` : ""}
+          ${facts.expectedLitigation ? `<span class="badge todo">${escapeHtml(facts.expectedLitigation === "Litigation" ? "Lit" : facts.expectedLitigation)}</span>` : ""}
+          ${facts.status ? `<span class="badge todo">${escapeHtml(facts.status)}</span>` : ""}
         </div>
       </div>
-      <div class="link-row">
-        ${slack ? `<a class="btn" target="_blank" rel="noreferrer" href="${slack}">Slack</a>` : ""}
+      <div class="facts-links">
+        ${slack ? `<a target="_blank" rel="noreferrer" href="${escapeAttr(slack)}">Slack channel ${escapeHtml(slackName)}</a>` : ""}
+        <span class="badge todo">Sheet status: ${escapeHtml(c.overview.litigation_status || "—")}</span>
+      </div>
+      <div class="facts-langs">
+        ${languageLine("Primary language", facts.preferredLanguage)}
+        ${languageLine("Secondary language", facts.secondaryLanguage)}
+      </div>
+      ${quo.length ? `
+        <div class="facts-quo">
+          <div class="label">Quo contacts</div>
+          ${quo.map((q) => `
+            <div class="quo-row">
+              ${q.sms_enabled ? "SMS on " : ""}${escapeHtml(q.display_name || c.overview.client_name)}
+              ${q.phone ? `<a href="tel:${escapeAttr(q.phone)}">${escapeHtml(formatPhone(q.phone))}</a>` : ""}
+            </div>
+          `).join("")}
+        </div>
+      ` : ""}
+      <div class="facts-grid">
+        <div><div class="label">Attorney</div><div class="value">${escapeHtml(c.overview.attorney_name || "—")}</div></div>
+        <div><div class="label">Paralegal</div><div class="value">${escapeHtml(c.overview.paralegal_name || "—")}</div></div>
+        <div><div class="label">Legal assistant</div><div class="value">${escapeHtml(facts.legalAssistant || "—")}</div></div>
+        <div><div class="label">Date signed</div><div class="value">${escapeHtml(facts.dateSigned || "—")}</div></div>
+        <div><div class="label">Last reviewed</div><div class="value">${escapeHtml(facts.lastReviewed || "—")}</div></div>
+      </div>
+      <div class="link-row" style="margin-top:16px;">
+        <a class="btn" target="_blank" rel="noreferrer" href="${tracker}">Case Tracker</a>
+        <a class="btn" target="_blank" rel="noreferrer" href="${docketFlow}">DocketFlow</a>
+        ${slack ? `<a class="btn" target="_blank" rel="noreferrer" href="${escapeAttr(slack)}">Slack</a>` : ""}
         ${dropbox ? `<a class="btn" target="_blank" rel="noreferrer" href="${dropbox}">Dropbox</a>` : ""}
       </div>
     </div>
@@ -417,12 +526,7 @@ function stageBlock(c, stage, editable) {
             </div>
             ${open ? `
               <div class="inline-notes">
-                ${notes.length ? notes.map((n) => `
-                  <div class="note-card">
-                    <div>${escapeHtml(n.body)}</div>
-                    <div class="muted">${new Date(n.created_at).toLocaleString()}${n.actor_name ? ` · ${escapeHtml(n.actor_name)}` : ""}</div>
-                  </div>
-                `).join("") : `<div class="muted">No notes yet.</div>`}
+                ${notes.length ? notes.map(noteCardHtml).join("") : `<div class="muted">No notes yet.</div>`}
                 <div class="inline-note-add">
                   <input data-inline-note="${t.id}" placeholder="Add a note">
                   <button class="btn pink" data-add-inline-note="${t.id}">Add</button>
@@ -545,12 +649,7 @@ function drawerHtml() {
         </div>
         <h3 style="margin:24px 0 8px;font-family:var(--serif);">Notes</h3>
         <div class="notes-list">
-          ${notes.length ? notes.map((n) => `
-            <div class="note-card">
-              <div>${escapeHtml(n.body)}</div>
-              <div class="muted">${new Date(n.created_at).toLocaleString()}${n.actor_name ? ` · ${escapeHtml(n.actor_name)}` : ""}</div>
-            </div>
-          `).join("") : `<div class="muted">No notes yet.</div>`}
+          ${notes.length ? notes.map(noteCardHtml).join("") : `<div class="muted">No notes yet.</div>`}
         </div>
         <label class="field"><span>Add note</span><textarea id="task-note" rows="3" placeholder="Attempted call, waiting on records…"></textarea></label>
         <button class="btn pink" id="add-note">Save note</button>
@@ -705,6 +804,34 @@ function bind() {
       if (e.key === "Enter") addInlineNote(el.dataset.inlineNote);
     });
   });
+  document.querySelectorAll("[data-edit-note]").forEach((el) => {
+    el.addEventListener("click", () => {
+      state.editingNoteId = el.dataset.editNote;
+      render();
+      document.querySelector(`[data-edit-note-body="${el.dataset.editNote}"]`)?.focus();
+    });
+  });
+  document.querySelectorAll("[data-cancel-note]").forEach((el) => {
+    el.addEventListener("click", () => {
+      state.editingNoteId = null;
+      render();
+    });
+  });
+  document.querySelectorAll("[data-save-note]").forEach((el) => {
+    el.addEventListener("click", () => saveEditedNote(el.dataset.saveNote));
+  });
+  document.querySelectorAll("[data-delete-note]").forEach((el) => {
+    el.addEventListener("click", () => deleteNote(el.dataset.deleteNote));
+  });
+  document.querySelectorAll("[data-edit-note-body]").forEach((el) => {
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveEditedNote(el.dataset.editNoteBody);
+      if (e.key === "Escape") {
+        state.editingNoteId = null;
+        render();
+      }
+    });
+  });
   document.getElementById("add-owner")?.addEventListener("change", async (e) => {
     const name = e.target.value;
     if (!name || !state.drawerTask) return;
@@ -802,30 +929,54 @@ async function loadDocket() {
     .eq("case_status", "active")
     .order("next_due_at", { ascending: true, nullsFirst: false });
   if (error) throw error;
-  const rank = { overdue: 0, deadline: 1, urgent: 2, needs_plan: 3, on_track: 4 };
-  state.docket = (data || []).sort((a, b) => (rank[a.risk] ?? 9) - (rank[b.risk] ?? 9) || String(a.next_due_at || "9").localeCompare(String(b.next_due_at || "9")));
+  state.docket = (data || []).sort(compareCaseNumber);
   state.staff = [...new Set(state.docket.map((c) => c.paralegal_name).filter(Boolean))].sort();
 }
 
 async function loadCase(id) {
   await loadTemplates();
-  const [{ data: overview }, { data: tasks }] = await Promise.all([
+  const [{ data: overview }, { data: tasks }, { data: caseRow }] = await Promise.all([
     supabase.from("checklist_case_overview").select("*").eq("case_id", id).maybeSingle(),
     supabase.from("checklist_tasks").select("*").eq("case_id", id).order("sequence"),
+    supabase.from("cases").select("case_type, status, date_of_incident, preferred_language, secondary_language, client_phone, assigned_contact_ids, created_at").eq("id", id).maybeSingle(),
   ]);
   if (!overview) {
     state.caseDetail = null;
     state.error = "Case not found.";
     return;
   }
-  const ids = (tasks || []).map((t) => t.id);
-  let notes = [];
-  if (ids.length) {
-    const { data } = await supabase.from("checklist_task_notes").select("*").in("task_id", ids).order("created_at");
-    notes = data || [];
-  }
-  state.caseNotes = notes;
-  state.caseDetail = { overview, tasks: tasks || [] };
+  const [{ data: tracker }, { data: notes }] = await Promise.all([
+    supabase.from("case_tracker_entries").select("id, expected_litigation, last_reviewed_at, date_signed_override, client_phone").eq("case_number", overview.case_number).eq("is_active", true).order("updated_at", { ascending: false }).limit(1).maybeSingle(),
+    (tasks || []).length
+      ? supabase.from("checklist_task_notes").select("*").in("task_id", (tasks || []).map((t) => t.id)).order("created_at")
+      : Promise.resolve({ data: [] }),
+  ]);
+  const assignedIds = caseRow?.assigned_contact_ids || [];
+  const [{ data: staffContacts }, { data: quo }] = await Promise.all([
+    assignedIds.length
+      ? supabase.from("contacts").select("id, name, role").in("id", assignedIds)
+      : Promise.resolve({ data: [] }),
+    tracker?.id
+      ? supabase.from("case_quo_contacts").select("display_name, phone, sms_enabled").eq("tracker_entry_id", tracker.id)
+      : Promise.resolve({ data: [] }),
+  ]);
+  const assistant = (staffContacts || []).find((person) => person.role === "legal_assistant");
+  const facts = {
+    caseType: caseRow?.case_type || overview.case_type || "",
+    status: caseRow?.status ? String(caseRow.status).replace(/^./, (ch) => ch.toUpperCase()) : "",
+    dateOfIncident: formatLongDate(caseRow?.date_of_incident),
+    preferredLanguage: caseRow?.preferred_language || "",
+    secondaryLanguage: caseRow?.secondary_language || "",
+    expectedLitigation: tracker?.expected_litigation || "",
+    legalAssistant: assistant?.name || "",
+    dateSigned: formatLongDate(tracker?.date_signed_override || caseRow?.created_at),
+    lastReviewed: formatLongDate(tracker?.last_reviewed_at),
+    quoContacts: (quo && quo.length)
+      ? quo
+      : (tracker?.client_phone ? [{ display_name: overview.client_name, phone: tracker.client_phone, sms_enabled: true }] : []),
+  };
+  state.caseNotes = notes || [];
+  state.caseDetail = { overview, tasks: tasks || [], facts };
   const names = [overview.paralegal_name, overview.attorney_name, ...state.staff];
   state.staff = [...new Set(names.filter(Boolean))].sort();
   if (state.route.taskId) await openTask(state.route.taskId);
@@ -1072,6 +1223,42 @@ async function saveNote(taskId, raw) {
     render();
     return;
   }
+  await reloadTaskNotes(taskId);
+}
+
+async function saveEditedNote(noteId) {
+  const body = document.querySelector(`[data-edit-note-body="${noteId}"]`)?.value?.trim();
+  const note = (state.caseNotes || []).find((n) => n.id === noteId);
+  if (!note || !body) return;
+  const { error } = await supabase.from("checklist_task_notes").update({
+    body,
+    updated_at: new Date().toISOString(),
+  }).eq("id", noteId);
+  if (error) {
+    state.error = error.message;
+    render();
+    return;
+  }
+  state.editingNoteId = null;
+  state.expandedNotes[note.task_id] = true;
+  await reloadTaskNotes(note.task_id);
+}
+
+async function deleteNote(noteId) {
+  const note = (state.caseNotes || []).find((n) => n.id === noteId);
+  if (!note || !window.confirm("Delete this note?")) return;
+  const { error } = await supabase.from("checklist_task_notes").delete().eq("id", noteId);
+  if (error) {
+    state.error = error.message;
+    render();
+    return;
+  }
+  if (state.editingNoteId === noteId) state.editingNoteId = null;
+  state.expandedNotes[note.task_id] = true;
+  await reloadTaskNotes(note.task_id);
+}
+
+async function reloadTaskNotes(taskId) {
   const { data: notes } = await supabase.from("checklist_task_notes").select("*").eq("task_id", taskId).order("created_at");
   state.caseNotes = [
     ...(state.caseNotes || []).filter((n) => n.task_id !== taskId),
