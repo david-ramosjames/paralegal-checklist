@@ -196,6 +196,7 @@ a { color: inherit; }
 .badge.urgent_task { background: var(--amber-soft); color: var(--amber); }
 .badge.client_contact { background: var(--blue-soft); color: var(--blue); }
 .badge.other_call { background: var(--green-soft); color: var(--green); }
+.badge.deliverable { background: #e8f1ea; color: var(--green); }
 .badge.todo { background: #eef1f5; color: var(--navy-600); }
 .badge.overdue, .badge.deadline-risk { background: var(--pink-soft); color: var(--pink-deep); }
 .badge.urgent { background: #f8dbe4; color: var(--rose); }

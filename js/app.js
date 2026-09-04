@@ -10,6 +10,7 @@ const TYPE_LABEL = {
   urgent_task: "Urgent task",
   client_contact: "Client contact",
   other_call: "Other call",
+  deliverable: "Deliverable",
   todo: "To do",
 };
 
@@ -27,7 +28,7 @@ const STAGE_LABEL = {
 };
 
 const STAGE_ORDER = Object.keys(STAGE_LABEL);
-const TYPE_ORDER = ["deadline", "urgent_client", "urgent_task", "client_contact", "other_call", "todo"];
+const TYPE_ORDER = ["deadline", "urgent_client", "urgent_task", "client_contact", "other_call", "deliverable", "todo"];
 const RISK_LABEL = {
   overdue: "Overdue",
   deadline: "Deadline",
