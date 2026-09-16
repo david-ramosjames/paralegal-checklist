@@ -74,17 +74,24 @@ const state = {
 };
 
 function parseRoute() {
-  const hash = location.hash.replace(/^#/, "") || "/work";
-  const parts = hash.split("/").filter(Boolean);
-  if (parts[0] === "cases" && parts[1]) return { name: "case", id: parts[1], taskId: new URLSearchParams(location.hash.split("?")[1] || "").get("task") };
+  const raw = (location.hash.replace(/^#/, "") || "/work").split("?")[0];
+  const parts = raw.split("/").filter(Boolean);
+  const params = new URLSearchParams(location.hash.split("?")[1] || "");
+  if (parts[0] === "cases" && parts[1]) return { name: "case", id: parts[1], taskId: params.get("task") };
   if (parts[0] === "cases") return { name: "cases" };
   if (parts[0] === "templates") return { name: "templates" };
   return { name: "work" };
 }
 
 window.addEventListener("hashchange", () => {
-  state.route = parseRoute();
-  state.drawerTask = null;
+  const next = parseRoute();
+  if (next.name !== "case" || next.id !== state.route.id) {
+    state.caseDetail = null;
+    state.caseNotes = [];
+    state.error = "";
+  }
+  if (!next.taskId) state.drawerTask = null;
+  state.route = next;
   render();
   loadRoute();
 });
@@ -319,7 +326,7 @@ function workHtml() {
       </select>
     </div>
     <div class="queue">
-      <div class="queue-row table-head"><div>Task</div><div>Due</div><div>Type</div><div></div></div>
+      <div class="queue-row table-head"><div>Task</div><div>Due</div><div>Type</div><div>Actions</div></div>
       ${rows.length ? rows.map(workRow).join("") : `<div class="empty">Nothing in this queue yet. Open a case, import a template, then mark a next action.</div>`}
     </div>
   `;
@@ -338,12 +345,12 @@ function workRow(task) {
         <div class="task-title">${escapeHtml(task.title)}</div>
       </div>
       <div class="due ${dueClass(task.due_at)}">${formatDue(task.due_at)}</div>
-      <div>${typeBadges(task)}</div>
+      <div class="task-type">${typeBadges(task)}</div>
       <div class="actions">
         <button class="btn primary" data-complete="${task.id}">Complete</button>
         <button class="btn" data-reschedule="${task.id}" data-when="tomorrow">Tomorrow</button>
         <button class="btn" data-reschedule="${task.id}" data-when="week">Next week</button>
-        <button class="btn ghost" data-open-task="${task.id}">Details</button>
+        <button class="btn ghost" data-open-task="${task.id}" data-open-case="${task.case_id}">Details</button>
       </div>
     </div>
   `;
@@ -415,7 +422,7 @@ function casesHtml() {
 
 function caseHtml() {
   const c = state.caseDetail;
-  if (!c) return `<div class="empty">Loading case…</div>`;
+  if (!c) return `<div class="empty">${escapeHtml(state.error || "Loading case…")}</div>`;
   const facts = c.facts || {};
   const active = c.tasks.filter((t) => t.status === "active").slice(0, 3);
   const slack = slackUrl(c.overview.slack_channel_id);
@@ -615,7 +622,10 @@ function drawerHtml() {
   return `
     <div class="drawer-backdrop" id="drawer-backdrop">
       <aside class="drawer">
-        <div class="muted">${STAGE_LABEL[t.stage] || t.stage}</div>
+        <div class="drawer-top">
+          <div class="muted">${STAGE_LABEL[t.stage] || t.stage}</div>
+          <button class="btn ghost" id="close-drawer" type="button">Close</button>
+        </div>
         <h2 style="font-family:var(--serif);margin:6px 0 12px;">${escapeHtml(t.title)}</h2>
         <div class="type-stack">${typeBadges(t)}</div>
         <div class="meta" style="margin:16px 0;">
@@ -761,11 +771,9 @@ function bind() {
     });
   });
   document.getElementById("drawer-backdrop")?.addEventListener("click", (e) => {
-    if (e.target.id === "drawer-backdrop") {
-      state.drawerTask = null;
-      render();
-    }
+    if (e.target.id === "drawer-backdrop") closeDrawer();
   });
+  document.getElementById("close-drawer")?.addEventListener("click", closeDrawer);
   document.getElementById("save-task")?.addEventListener("click", saveTask);
   document.getElementById("add-note")?.addEventListener("click", addNote);
   document.getElementById("create-followup")?.addEventListener("click", createFollowUp);
@@ -1149,14 +1157,32 @@ async function deleteTask(id) {
   await loadRoute();
 }
 
+function closeDrawer() {
+  state.drawerTask = null;
+  if (state.route.name === "case" && state.route.taskId) {
+    history.replaceState(null, "", `${location.pathname}${location.search}#/cases/${state.route.id}`);
+    state.route = parseRoute();
+  }
+  render();
+  if (state.route.name === "case" && !state.caseDetail) loadRoute();
+}
+
 async function openTask(taskId, caseId) {
-  let task = state.work.find((t) => t.id === taskId) || state.caseDetail?.tasks.find((t) => t.id === taskId);
+  let task = state.work.find((t) => t.id === taskId) || state.caseDetail?.tasks?.find((t) => t.id === taskId);
   if (!task) {
     const { data } = await supabase.from("checklist_tasks").select("*").eq("id", taskId).maybeSingle();
     task = data;
   }
   if (!task) return;
-  if (caseId && state.route.name !== "case") location.hash = `#/cases/${caseId}?task=${taskId}`;
+  const targetCase = caseId || task.case_id;
+  if (targetCase && (state.route.name !== "case" || state.route.id !== targetCase)) {
+    location.hash = `#/cases/${targetCase}?task=${taskId}`;
+    return;
+  }
+  if (targetCase && state.route.name === "case" && state.route.taskId !== taskId) {
+    history.replaceState(null, "", `${location.pathname}${location.search}#/cases/${targetCase}?task=${taskId}`);
+    state.route = parseRoute();
+  }
   const [{ data: events }, { data: notes }, { data: overview }] = await Promise.all([
     supabase.from("checklist_task_events").select("*").eq("task_id", taskId).order("created_at", { ascending: false }),
     supabase.from("checklist_task_notes").select("*").eq("task_id", taskId).order("created_at"),
@@ -1322,14 +1348,18 @@ async function refreshAfterChange(taskId) {
   else render();
 }
 
+let loadSeq = 0;
 async function loadRoute() {
+  const seq = ++loadSeq;
   try {
     if (state.route.name === "work") await loadWork();
     if (state.route.name === "cases") await loadDocket();
     if (state.route.name === "case") await loadCase(state.route.id);
     if (state.route.name === "templates") await loadTemplates();
+    if (seq !== loadSeq) return;
     render();
   } catch (err) {
+    if (seq !== loadSeq) return;
     state.error = err.message;
     render();
   }
@@ -1346,5 +1376,9 @@ async function boot() {
   await loadProfile();
   await loadRoute();
 }
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && state.drawerTask) closeDrawer();
+});
 
 boot();
