@@ -338,10 +338,11 @@ function filterLabel(f) {
 
 function workRow(task) {
   const client = task.case?.client_name || "Unknown client";
+  const caseNumber = task.case?.case_number ? `#${task.case.case_number}` : "";
   return `
     <div class="queue-row">
       <div class="clickable" data-open-case="${task.case_id}" data-open-task="${task.id}">
-        <div class="case-name">${escapeHtml(client)}</div>
+        <div class="case-name">${escapeHtml(client)}${caseNumber ? ` <span class="muted">${escapeHtml(caseNumber)}</span>` : ""}</div>
         <div class="task-title">${escapeHtml(task.title)}</div>
       </div>
       <div class="due ${dueClass(task.due_at)}">${formatDue(task.due_at)}</div>

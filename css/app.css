@@ -178,6 +178,7 @@ a { color: inherit; }
 .queue-row:last-child, .docket-row:last-child { border-bottom: 0; }
 .queue-row:hover, .docket-row:hover { background: #fff8f3; }
 .case-name { font-weight: 600; }
+.case-name .muted { font-weight: 500; margin-left: 8px; }
 .task-title { color: var(--ink); }
 .due { white-space: nowrap; }
 .due.overdue { color: var(--pink-deep); font-weight: 600; }
