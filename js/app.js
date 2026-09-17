@@ -25,6 +25,7 @@ const STAGE_LABEL = {
   mediation: "Mediation",
   trial: "Trial",
   settlement_close: "Settlement / Close",
+  miscellaneous: "Miscellaneous",
 };
 
 const STAGE_ORDER = Object.keys(STAGE_LABEL);
@@ -238,7 +239,7 @@ function shell(content) {
       <aside class="sidebar">
         <div class="brand">
           <div class="brand-kicker">Ramos James</div>
-          <div class="brand-name">Paralegal Checklist</div>
+          <div class="brand-name">Paralegal Case Hub</div>
         </div>
         <nav class="nav">
           ${navLink("#/work", "My Work", "work")}
@@ -277,7 +278,7 @@ function loginHtml() {
     <div class="login">
       <div class="login-card">
         <div class="brand-kicker">Ramos James</div>
-        <h1>Paralegal Checklist</h1>
+        <h1>Paralegal Case Hub</h1>
         <p>Sign in with your Ramos James Google account.</p>
         <div class="error">${state.error}</div>
         <button class="google-btn" id="google-login" type="button">
@@ -627,7 +628,11 @@ function drawerHtml() {
           <div class="muted">${STAGE_LABEL[t.stage] || t.stage}</div>
           <button class="btn ghost" id="close-drawer" type="button">Close</button>
         </div>
-        <h2 style="font-family:var(--serif);margin:6px 0 12px;">${escapeHtml(t.title)}</h2>
+        <label class="field task-title-field">
+          <span>Task name</span>
+          <input id="task-title" value="${escapeAttr(t.title)}" autocomplete="off">
+        </label>
+        <p class="muted" style="margin:-4px 0 12px;">Changes this case only. The template is not updated.</p>
         <div class="type-stack">${typeBadges(t)}</div>
         <div class="meta" style="margin:16px 0;">
           <label class="field"><span>Due</span><input type="date" id="task-due" value="${t.due_at || ""}"></label>
@@ -776,6 +781,12 @@ function bind() {
   });
   document.getElementById("close-drawer")?.addEventListener("click", closeDrawer);
   document.getElementById("save-task")?.addEventListener("click", saveTask);
+  document.getElementById("task-title")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      saveTask();
+    }
+  });
   document.getElementById("add-note")?.addEventListener("click", addNote);
   document.getElementById("create-followup")?.addEventListener("click", createFollowUp);
   document.querySelectorAll("[data-reopen]").forEach((el) => el.addEventListener("click", () => reopenTask(el.dataset.reopen)));
@@ -1234,9 +1245,12 @@ async function rescheduleTask(id, when) {
 
 async function saveTask() {
   const t = state.drawerTask;
+  const title = document.getElementById("task-title")?.value?.trim();
+  if (!title) return;
   const types = [...document.querySelectorAll("input[name='task-types']:checked")].map((el) => el.value);
   const owner = document.getElementById("task-owner").value || caseParalegal() || null;
   await supabase.from("checklist_tasks").update({
+    title,
     due_at: document.getElementById("task-due").value || null,
     types: types.length ? types : ["todo"],
     type: types.length ? TYPE_ORDER.find((type) => types.includes(type)) : "todo",

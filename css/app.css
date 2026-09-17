@@ -481,6 +481,15 @@ a { color: inherit; }
   align-items: center;
   gap: 12px;
 }
+.task-title-field { margin: 8px 0 12px; }
+.task-title-field input {
+  font-family: var(--serif);
+  font-size: 26px;
+  font-weight: 560;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+  padding: 8px 10px;
+}
 .notes-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .history { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
 .history-item {
