@@ -58,6 +58,7 @@ const state = {
   route: parseRoute(),
   work: [],
   docket: [],
+  closed: [],
   caseDetail: null,
   drawerTask: null,
   events: [],
@@ -80,6 +81,7 @@ function parseRoute() {
   const params = new URLSearchParams(location.hash.split("?")[1] || "");
   if (parts[0] === "cases" && parts[1]) return { name: "case", id: parts[1], taskId: params.get("task") };
   if (parts[0] === "cases") return { name: "cases" };
+  if (parts[0] === "closed") return { name: "closed" };
   if (parts[0] === "templates") return { name: "templates" };
   return { name: "work" };
 }
@@ -244,6 +246,7 @@ function shell(content) {
         <nav class="nav">
           ${navLink("#/work", "My Work", "work")}
           ${navLink("#/cases", "Cases", "cases")}
+          ${navLink("#/closed", "Closed Cases", "closed")}
           ${navLink("#/templates", "Templates", "templates")}
         </nav>
         <div class="sidebar-foot">
@@ -382,8 +385,10 @@ function visibleWork() {
 }
 
 function casesHtml() {
+  const closed = state.route.name === "closed";
+  const source = closed ? state.closed : state.docket;
   const q = state.search.toLowerCase();
-  const rows = state.docket.filter((c) => {
+  const rows = source.filter((c) => {
     const hay = `${c.client_name} ${c.case_number} ${c.next_action || ""} ${c.paralegal_name || ""}`.toLowerCase();
     if (q && !hay.includes(q)) return false;
     if (state.staffFilter && c.paralegal_name !== state.staffFilter) return false;
@@ -392,8 +397,8 @@ function casesHtml() {
   return `
     <div class="page-head">
       <div>
-        <h1>Cases</h1>
-        <p>Next action, due date, and risk across the docket.</p>
+        <h1>${closed ? "Closed Cases" : "Cases"}</h1>
+        <p>${closed ? "Archived files you can open and review." : "Next action, due date, and risk across the docket."}</p>
       </div>
     </div>
     <div class="toolbar">
@@ -404,20 +409,20 @@ function casesHtml() {
       </select>
     </div>
     <div class="table-wrap">
-      <div class="table-head docket"><div>Case</div><div>Stage</div><div>Next action</div><div>Due</div><div>Risk</div><div>Owner</div></div>
-      ${rows.map((c) => `
+      <div class="table-head docket"><div>Case</div><div>Stage</div><div>Next action</div><div>Due</div><div>${closed ? "Status" : "Risk"}</div><div>Owner</div></div>
+      ${rows.length ? rows.map((c) => `
         <div class="docket-row clickable" data-open-case="${c.case_id}">
           <div>
             <div class="case-name">${escapeHtml(c.client_name || "Untitled")}</div>
             <div class="muted">#${escapeHtml(c.case_number || "—")}</div>
           </div>
           <div>${escapeHtml(c.litigation_status || "—")}</div>
-          <div>${c.next_action ? escapeHtml(c.next_action) : '<span class="muted">Needs plan</span>'}</div>
-          <div class="due ${dueClass(c.next_due_at)}">${formatDue(c.next_due_at)}</div>
-          <div>${riskBadge(c.risk)}</div>
+          <div>${c.next_action ? escapeHtml(c.next_action) : `<span class="muted">${closed ? "—" : "Needs plan"}</span>`}</div>
+          <div class="due ${closed ? "" : dueClass(c.next_due_at)}">${formatDue(c.next_due_at)}</div>
+          <div>${closed ? `<span class="badge todo">Archived</span>` : riskBadge(c.risk)}</div>
           <div>${escapeHtml(c.paralegal_name || "—")}</div>
         </div>
-      `).join("")}
+      `).join("") : `<div class="empty">${closed ? "No closed cases match this search." : "No cases match this search."}</div>`}
     </div>
   `;
 }
@@ -447,7 +452,7 @@ function caseHtml() {
     ["Last reviewed", facts.lastReviewed],
   ].filter(([, value]) => value);
   return `
-    <a href="#/cases" class="muted">← Docket</a>
+    <a href="${c.overview.case_status === "archived" ? "#/closed" : "#/cases"}" class="muted">${c.overview.case_status === "archived" ? "← Closed Cases" : "← Docket"}</a>
     <div class="facts-card">
       <div class="facts-top">
         <div>
@@ -728,7 +733,7 @@ function render() {
     return;
   }
   if (state.route.name === "work") root.innerHTML = shell(workHtml());
-  else if (state.route.name === "cases") root.innerHTML = shell(casesHtml());
+  else if (state.route.name === "cases" || state.route.name === "closed") root.innerHTML = shell(casesHtml());
   else if (state.route.name === "case") root.innerHTML = shell(caseHtml());
   else if (state.route.name === "templates") root.innerHTML = shell(templatesHtml());
   bind();
@@ -953,14 +958,24 @@ async function loadWork() {
 }
 
 async function loadDocket() {
+  await loadCaseList("active");
+}
+
+async function loadClosed() {
+  await loadCaseList("archived");
+}
+
+async function loadCaseList(status) {
   const { data, error } = await supabase
     .from("checklist_case_overview")
     .select("*")
-    .eq("case_status", "active")
+    .eq("case_status", status)
     .order("next_due_at", { ascending: true, nullsFirst: false });
   if (error) throw error;
-  state.docket = (data || []).sort(compareCaseNumber);
-  state.staff = [...new Set(state.docket.map((c) => c.paralegal_name).filter(Boolean))].sort();
+  const rows = (data || []).sort(compareCaseNumber);
+  if (status === "archived") state.closed = rows;
+  else state.docket = rows;
+  state.staff = [...new Set(rows.map((c) => c.paralegal_name).filter(Boolean))].sort();
 }
 
 async function loadCase(id) {
@@ -1369,6 +1384,7 @@ async function loadRoute() {
   try {
     if (state.route.name === "work") await loadWork();
     if (state.route.name === "cases") await loadDocket();
+    if (state.route.name === "closed") await loadClosed();
     if (state.route.name === "case") await loadCase(state.route.id);
     if (state.route.name === "templates") await loadTemplates();
     if (seq !== loadSeq) return;
