@@ -1,7 +1,7 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
-import { SUPABASE_ANON_KEY, SUPABASE_URL } from "./config.js";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.118.0";
+import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from "./config.js";
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 const root = document.getElementById("root");
 
 const TYPE_LABEL = {
