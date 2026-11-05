@@ -140,6 +140,14 @@ a { color: inherit; }
   color: var(--navy-800);
 }
 .chip.active { background: var(--navy); color: white; border-color: var(--navy); }
+.type-toolbar { margin-top: -6px; }
+.filter-label {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
 
 .queue, .table-wrap {
   background: var(--card);

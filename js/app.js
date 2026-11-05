@@ -69,6 +69,9 @@ const state = {
   filter: "today",
   search: "",
   staffFilter: "",
+  attorneyFilter: "",
+  typeFilters: [],
+  attorneys: [],
   error: "",
   caseNotes: [],
   expandedNotes: {},
@@ -329,6 +332,12 @@ function workHtml() {
         ${state.staff.map((name) => `<option value="${escapeAttr(name)}" ${state.staffFilter === name ? "selected" : ""}>${name}</option>`).join("")}
       </select>
     </div>
+    <div class="toolbar type-toolbar">
+      <span class="filter-label">Type</span>
+      <div class="chips">
+        ${TYPE_ORDER.map((type) => `<button class="chip ${state.typeFilters.includes(type) ? "active" : ""}" data-type-filter="${type}">${TYPE_LABEL[type]}</button>`).join("")}
+      </div>
+    </div>
     <div class="queue">
       <div class="queue-row table-head"><div>Task</div><div>Due</div><div>Type</div><div>Actions</div></div>
       ${rows.length ? rows.map(workRow).join("") : `<div class="empty">Nothing in this queue yet. Open a case, import a template, then mark a next action.</div>`}
@@ -368,6 +377,7 @@ function visibleWork() {
       const hay = `${t.title} ${t.case?.client_name || ""} ${t.case?.case_number || ""}`.toLowerCase();
       if (state.search && !hay.includes(state.search.toLowerCase())) return false;
       if (state.staffFilter && !taskOwners(t).includes(state.staffFilter)) return false;
+      if (state.typeFilters.length && !taskTypes(t).some((type) => state.typeFilters.includes(type))) return false;
       if (state.filter === "mine") {
         const me = state.profile?.staff_label;
         return (me && taskOwners(t).includes(me)) || t.owner_id === state.user.id;
@@ -392,6 +402,7 @@ function casesHtml() {
     const hay = `${c.client_name} ${c.case_number} ${c.next_action || ""} ${c.paralegal_name || ""} ${c.attorney_name || ""}`.toLowerCase();
     if (q && !hay.includes(q)) return false;
     if (state.staffFilter && c.paralegal_name !== state.staffFilter) return false;
+    if (state.attorneyFilter && c.attorney_name !== state.attorneyFilter) return false;
     return true;
   }).sort(compareCaseNumber);
   return `
@@ -403,6 +414,10 @@ function casesHtml() {
     </div>
     <div class="toolbar">
       <input class="search" id="search" placeholder="Search client, case number, or next action" value="${escapeAttr(state.search)}">
+      <select id="attorney-filter" class="search" style="flex:0 0 200px">
+        <option value="">All attorneys</option>
+        ${state.attorneys.map((name) => `<option value="${escapeAttr(name)}" ${state.attorneyFilter === name ? "selected" : ""}>${name}</option>`).join("")}
+      </select>
       <select id="staff-filter" class="search" style="flex:0 0 200px">
         <option value="">All paralegals</option>
         ${state.staff.map((name) => `<option value="${escapeAttr(name)}" ${state.staffFilter === name ? "selected" : ""}>${name}</option>`).join("")}
@@ -763,6 +778,19 @@ function bind() {
     state.staffFilter = e.target.value;
     render();
   });
+  document.getElementById("attorney-filter")?.addEventListener("change", (e) => {
+    state.attorneyFilter = e.target.value;
+    render();
+  });
+  document.querySelectorAll("[data-type-filter]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const type = el.dataset.typeFilter;
+      state.typeFilters = state.typeFilters.includes(type)
+        ? state.typeFilters.filter((item) => item !== type)
+        : [...state.typeFilters, type];
+      render();
+    });
+  });
   document.querySelectorAll("[data-filter]").forEach((el) => {
     el.addEventListener("click", () => {
       state.filter = el.dataset.filter;
@@ -977,6 +1005,7 @@ async function loadCaseList(status) {
   if (status === "archived") state.closed = rows;
   else state.docket = rows;
   state.staff = [...new Set(rows.map((c) => c.paralegal_name).filter(Boolean))].sort();
+  state.attorneys = [...new Set(rows.map((c) => c.attorney_name).filter(Boolean))].sort();
 }
 
 async function loadCase(id) {
