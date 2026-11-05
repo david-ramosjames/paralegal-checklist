@@ -166,7 +166,7 @@ a { color: inherit; }
   grid-template-columns: subgrid;
   grid-column: 1 / -1;
 }
-.docket-row, .table-head.docket { grid-template-columns: 1.3fr 140px 1.4fr 110px 120px 140px; }
+.docket-row, .table-head.docket { grid-template-columns: 1.2fr 120px 1.2fr 90px 110px 140px 140px; }
 .table-head {
   font-size: 11px;
   letter-spacing: 0.1em;

@@ -389,7 +389,7 @@ function casesHtml() {
   const source = closed ? state.closed : state.docket;
   const q = state.search.toLowerCase();
   const rows = source.filter((c) => {
-    const hay = `${c.client_name} ${c.case_number} ${c.next_action || ""} ${c.paralegal_name || ""}`.toLowerCase();
+    const hay = `${c.client_name} ${c.case_number} ${c.next_action || ""} ${c.paralegal_name || ""} ${c.attorney_name || ""}`.toLowerCase();
     if (q && !hay.includes(q)) return false;
     if (state.staffFilter && c.paralegal_name !== state.staffFilter) return false;
     return true;
@@ -409,7 +409,7 @@ function casesHtml() {
       </select>
     </div>
     <div class="table-wrap">
-      <div class="table-head docket"><div>Case</div><div>Stage</div><div>Next action</div><div>Due</div><div>${closed ? "Status" : "Risk"}</div><div>Owner</div></div>
+      <div class="table-head docket"><div>Case</div><div>Stage</div><div>Next action</div><div>Due</div><div>${closed ? "Status" : "Risk"}</div><div>Attorney</div><div>Paralegal</div></div>
       ${rows.length ? rows.map((c) => `
         <div class="docket-row clickable" data-open-case="${c.case_id}">
           <div>
@@ -420,6 +420,7 @@ function casesHtml() {
           <div>${c.next_action ? escapeHtml(c.next_action) : `<span class="muted">${closed ? "—" : "Needs plan"}</span>`}</div>
           <div class="due ${closed ? "" : dueClass(c.next_due_at)}">${formatDue(c.next_due_at)}</div>
           <div>${closed ? `<span class="badge todo">Archived</span>` : riskBadge(c.risk)}</div>
+          <div>${escapeHtml(c.attorney_name || "—")}</div>
           <div>${escapeHtml(c.paralegal_name || "—")}</div>
         </div>
       `).join("") : `<div class="empty">${closed ? "No closed cases match this search." : "No cases match this search."}</div>`}
