@@ -150,6 +150,11 @@ function taskOwners(task) {
   return [task?.owner_name, ...extra].filter(Boolean);
 }
 
+function workMatchesStaff(task, name) {
+  if (!name) return true;
+  return taskOwners(task).includes(name) || task.case_paralegal === name;
+}
+
 function notesFor(taskId) {
   return (state.caseNotes || []).filter((n) => n.task_id === taskId);
 }
@@ -376,11 +381,11 @@ function visibleWork() {
     .filter((t) => {
       const hay = `${t.title} ${t.case?.client_name || ""} ${t.case?.case_number || ""}`.toLowerCase();
       if (state.search && !hay.includes(state.search.toLowerCase())) return false;
-      if (state.staffFilter && !taskOwners(t).includes(state.staffFilter)) return false;
+      if (state.staffFilter && !workMatchesStaff(t, state.staffFilter)) return false;
       if (state.typeFilters.length && !taskTypes(t).some((type) => state.typeFilters.includes(type))) return false;
       if (state.filter === "mine") {
         const me = state.profile?.staff_label;
-        return (me && taskOwners(t).includes(me)) || t.owner_id === state.user.id;
+        return (me && workMatchesStaff(t, me)) || t.owner_id === state.user.id;
       }
       if (state.filter === "today") return !t.due_at || t.due_at <= today;
       if (state.filter === "upcoming") return t.due_at && t.due_at > today;
@@ -972,18 +977,22 @@ async function loadProfile() {
 }
 
 async function loadWork() {
-  const [{ data, error }, { data: names }] = await Promise.all([
+  const [{ data, error }, { data: overviews }] = await Promise.all([
     supabase
       .from("checklist_tasks")
       .select("*, case:cases!inner(id, client_name, case_number, case_type, status)")
       .eq("status", "active")
       .eq("case.status", "active")
       .order("due_at", { ascending: true, nullsFirst: false }),
-    supabase.from("checklist_case_overview").select("paralegal_name").eq("case_status", "active"),
+    supabase.from("checklist_case_overview").select("case_id, paralegal_name").eq("case_status", "active"),
   ]);
   if (error) throw error;
-  state.work = (data || []).filter((t) => t.case);
-  state.staff = [...new Set((names || []).map((c) => c.paralegal_name).filter(Boolean))].sort();
+  const paralegalByCase = Object.fromEntries((overviews || []).map((row) => [row.case_id, row.paralegal_name || ""]));
+  state.work = (data || []).filter((t) => t.case).map((t) => ({
+    ...t,
+    case_paralegal: paralegalByCase[t.case_id] || "",
+  }));
+  state.staff = [...new Set((overviews || []).map((row) => row.paralegal_name).filter(Boolean))].sort();
 }
 
 async function loadDocket() {
