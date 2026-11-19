@@ -38,6 +38,14 @@ const RISK_LABEL = {
   needs_plan: "Needs plan",
 };
 const CASE_TRACKER_CASE = "https://rjl-case-tracker.vercel.app/cases";
+
+/** contacts.roles[] with fallback to primary contacts.role */
+function contactHasRole(person, want) {
+  if (!person || !want) return false;
+  const roles = Array.isArray(person.roles) ? person.roles.filter(Boolean) : [];
+  if (roles.length) return roles.includes(want);
+  return person.role === want;
+}
 const DOCKET_FLOW_CASE = "https://rjl-docket-flow.vercel.app/cases";
 const LANGUAGE_FLAG = {
   Spanish: "🇪🇸",
@@ -1038,13 +1046,13 @@ async function loadCase(id) {
   const assignedIds = caseRow?.assigned_contact_ids || [];
   const [{ data: staffContacts }, { data: quo }] = await Promise.all([
     assignedIds.length
-      ? supabase.from("contacts").select("id, name, role").in("id", assignedIds)
+      ? supabase.from("contacts").select("id, name, role, roles").in("id", assignedIds)
       : Promise.resolve({ data: [] }),
     tracker?.id
       ? supabase.from("case_quo_contacts").select("display_name, phone, sms_enabled, quo_contact_id, quo_conversation_id, quo_phone_number_id").eq("tracker_entry_id", tracker.id)
       : Promise.resolve({ data: [] }),
   ]);
-  const assistant = (staffContacts || []).find((person) => person.role === "legal_assistant");
+  const assistant = (staffContacts || []).find((person) => contactHasRole(person, "legal_assistant"));
   const quoRows = (quo && quo.length)
     ? quo
     : (tracker?.client_phone || tracker?.quo_conversation_id
