@@ -115,20 +115,26 @@ function todayISO() {
 }
 
 function formatDue(value) {
-  if (!value) return "—";
+  const due = dueInputValue(value);
+  if (!due) return "—";
   const today = todayISO();
-  if (value === today) return "Today";
+  if (due === today) return "Today";
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
-  if (value === tomorrow.toISOString().slice(0, 10)) return "Tomorrow";
-  return new Date(`${value}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  if (due === tomorrow.toISOString().slice(0, 10)) return "Tomorrow";
+  return new Date(`${due}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 function dueClass(value) {
-  if (!value) return "";
-  if (value < todayISO()) return "overdue";
-  if (value === todayISO()) return "today";
+  const due = dueInputValue(value);
+  if (!due) return "";
+  if (due < todayISO()) return "overdue";
+  if (due === todayISO()) return "today";
   return "";
+}
+
+function dueInputValue(value) {
+  return String(value || "").slice(0, 10);
 }
 
 function badge(type) {
@@ -669,7 +675,7 @@ function drawerHtml() {
         <p class="muted" style="margin:-4px 0 12px;">Changes this case only. The template is not updated.</p>
         <div class="type-stack">${typeBadges(t)}</div>
         <div class="meta" style="margin:16px 0;">
-          <label class="field"><span>Due</span><input type="date" id="task-due" value="${t.due_at || ""}"></label>
+          <label class="field"><span>Due</span><input type="date" id="task-due" value="${dueInputValue(t.due_at)}"></label>
           <div class="field">
             <span>Types</span>
             <div class="flag-grid">
@@ -1025,13 +1031,15 @@ async function loadCaseList(status) {
   state.attorneys = [...new Set(rows.map((c) => c.attorney_name).filter(Boolean))].sort();
 }
 
-async function loadCase(id) {
+async function loadCase(id, seq = loadSeq) {
   await loadTemplates();
+  if (seq !== loadSeq) return;
   const [{ data: overview }, { data: tasks }, { data: caseRow }] = await Promise.all([
     supabase.from("checklist_case_overview").select("*").eq("case_id", id).maybeSingle(),
     supabase.from("checklist_tasks").select("*").eq("case_id", id).order("sequence"),
     supabase.from("cases").select("case_type, status, date_of_incident, preferred_language, secondary_language, client_phone, assigned_contact_ids, created_at").eq("id", id).maybeSingle(),
   ]);
+  if (seq !== loadSeq) return;
   if (!overview) {
     state.caseDetail = null;
     state.error = "Case not found.";
@@ -1076,11 +1084,12 @@ async function loadCase(id) {
       quo_contact_id: row.quo_contact_id || (index === 0 ? tracker?.quo_contact_id : null),
     })),
   };
+  if (seq !== loadSeq) return;
   state.caseNotes = notes || [];
   state.caseDetail = { overview, tasks: tasks || [], facts };
   const names = [overview.paralegal_name, overview.attorney_name, ...state.staff];
   state.staff = [...new Set(names.filter(Boolean))].sort();
-  if (state.route.taskId) await openTask(state.route.taskId);
+  if (state.route.taskId && state.drawerTask?.id !== state.route.taskId) await openTask(state.route.taskId);
 }
 
 async function loadTemplates() {
@@ -1241,12 +1250,18 @@ function closeDrawer() {
   if (state.route.name === "case" && !state.caseDetail) loadRoute();
 }
 
-async function openTask(taskId, caseId) {
-  let task = state.work.find((t) => t.id === taskId) || state.caseDetail?.tasks?.find((t) => t.id === taskId);
-  if (!task) {
-    const { data } = await supabase.from("checklist_tasks").select("*").eq("id", taskId).maybeSingle();
-    task = data;
+function applyTaskUpdate(row) {
+  if (!row?.id) return;
+  state.drawerTask = state.drawerTask?.id === row.id ? { ...state.drawerTask, ...row } : state.drawerTask;
+  if (state.caseDetail?.tasks) {
+    state.caseDetail.tasks = state.caseDetail.tasks.map((task) => task.id === row.id ? { ...task, ...row } : task);
   }
+  state.work = state.work.map((task) => task.id === row.id ? { ...task, ...row } : task);
+}
+
+async function openTask(taskId, caseId) {
+  const { data: fresh } = await supabase.from("checklist_tasks").select("*").eq("id", taskId).maybeSingle();
+  let task = fresh || state.work.find((t) => t.id === taskId) || state.caseDetail?.tasks?.find((t) => t.id === taskId);
   if (!task) return;
   const targetCase = caseId || task.case_id;
   if (targetCase && (state.route.name !== "case" || state.route.id !== targetCase)) {
@@ -1301,7 +1316,14 @@ async function rescheduleTask(id, when) {
   const due = new Date();
   if (when === "tomorrow") due.setDate(due.getDate() + 1);
   if (when === "week") due.setDate(due.getDate() + 7);
-  await supabase.from("checklist_tasks").update({ due_at: due.toISOString().slice(0, 10) }).eq("id", id);
+  const dueAt = due.toISOString().slice(0, 10);
+  const { data, error } = await supabase.from("checklist_tasks").update({ due_at: dueAt }).eq("id", id).select().maybeSingle();
+  if (error) {
+    state.error = error.message;
+    render();
+    return;
+  }
+  applyTaskUpdate(data || { id, due_at: dueAt });
   await refreshAfterChange(id);
 }
 
@@ -1311,13 +1333,25 @@ async function saveTask() {
   if (!title) return;
   const types = [...document.querySelectorAll("input[name='task-types']:checked")].map((el) => el.value);
   const owner = document.getElementById("task-owner").value || caseParalegal() || null;
-  await supabase.from("checklist_tasks").update({
+  const dueAt = dueInputValue(document.getElementById("task-due")?.value) || null;
+  const { data, error } = await supabase.from("checklist_tasks").update({
     title,
-    due_at: document.getElementById("task-due").value || null,
+    due_at: dueAt,
     types: types.length ? types : ["todo"],
     type: types.length ? TYPE_ORDER.find((type) => types.includes(type)) : "todo",
     owner_name: owner,
-  }).eq("id", t.id);
+  }).eq("id", t.id).select().maybeSingle();
+  if (error) {
+    state.error = error.message;
+    render();
+    return;
+  }
+  if (!data) {
+    state.error = "The due date did not save. Try again.";
+    render();
+    return;
+  }
+  applyTaskUpdate(data);
   await refreshAfterChange(t.id);
 }
 
@@ -1432,7 +1466,7 @@ async function loadRoute() {
     if (state.route.name === "work") await loadWork();
     if (state.route.name === "cases") await loadDocket();
     if (state.route.name === "closed") await loadClosed();
-    if (state.route.name === "case") await loadCase(state.route.id);
+    if (state.route.name === "case") await loadCase(state.route.id, seq);
     if (state.route.name === "templates") await loadTemplates();
     if (seq !== loadSeq) return;
     render();
